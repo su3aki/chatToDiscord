@@ -7,3 +7,6 @@ __pycache__/
 
 # Logs / outputs
 screenshots/
+ocr.pid
+ocr.status
+STOP

@@ -8,6 +8,7 @@ import re
 from dataclasses import dataclass
 from typing import Optional, Tuple
 from datetime import datetime
+import signal
 
 import requests
 from PIL import Image, ImageOps
@@ -48,6 +49,14 @@ class Config:
     save_screenshot_once: bool = False
     # Output directory for screenshots
     screenshot_dir: str = "screenshots"
+    # Stop if this file exists
+    stop_file: str = "STOP"
+    # PID file path
+    pid_file: str = "ocr.pid"
+    # Status file path
+    status_file: str = "ocr.status"
+    # Heartbeat interval seconds
+    heartbeat_sec: float = 5.0
 
 
 class Sender:
@@ -192,9 +201,28 @@ def save_screenshots(img_full: Image.Image, img_crop: Image.Image, out_dir: str)
     print(f"Saved screenshots: {full_path} / {crop_path}")
 
 
+def write_status(path: str, state: str) -> None:
+    ts = int(time.time())
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(f"{state}|{ts}\n")
+
+
 def main() -> None:
+    stop_requested = False
+
+    def _handle_signal(_signum, _frame):
+        nonlocal stop_requested
+        stop_requested = True
+
+    signal.signal(signal.SIGINT, _handle_signal)
+    signal.signal(signal.SIGTERM, _handle_signal)
+
     env_path = os.getenv("ENV_FILE", os.path.join(os.path.dirname(__file__), ".env"))
     load_env_file(env_path)
+
+    tesseract_cmd = os.getenv("TESSERACT_CMD", "")
+    if tesseract_cmd:
+        pytesseract.pytesseract.tesseract_cmd = tesseract_cmd
 
     cfg = Config(
         window_title=os.getenv("LINE_WINDOW_TITLE", "LINE"),
@@ -209,6 +237,10 @@ def main() -> None:
         save_screenshot=parse_bool(os.getenv("SAVE_SCREENSHOT", ""), False),
         save_screenshot_once=parse_bool(os.getenv("SAVE_SCREENSHOT_ONCE", ""), False),
         screenshot_dir=os.getenv("SCREENSHOT_DIR", "screenshots"),
+        stop_file=os.getenv("STOP_FILE", "STOP"),
+        pid_file=os.getenv("PID_FILE", "ocr.pid"),
+        status_file=os.getenv("STATUS_FILE", "ocr.status"),
+        heartbeat_sec=float(os.getenv("HEARTBEAT_SEC", "5")),
     )
 
     if not cfg.webhook_url:
@@ -218,35 +250,65 @@ def main() -> None:
 
     last_text = ""
     saved_once = False
-    print("Starting OCR loop...")
-    while True:
-        rect = get_window_rect(cfg.window_title)
-        img_full = grab_window_image(rect)
-        img_crop = apply_crop(img_full, cfg.crop_rect)
-        if cfg.preprocess:
-            img_ocr = preprocess_image(img_crop, cfg.threshold)
-        else:
-            img_ocr = img_crop
-        text = ocr_image(img_ocr, cfg.ocr_lang)
-        if cfg.normalize_whitespace:
-            text = normalize_text(text, cfg.keep_newlines)
+    last_heartbeat = 0.0
 
-        if cfg.save_screenshot or cfg.save_screenshot_once:
-            if not saved_once or cfg.save_screenshot:
-                save_screenshots(img_full, img_crop, cfg.screenshot_dir)
-                saved_once = True
-            if cfg.save_screenshot_once:
+    try:
+        with open(cfg.pid_file, "w", encoding="utf-8") as f:
+            f.write(str(os.getpid()))
+        write_status(cfg.status_file, "running")
+
+        print("Starting OCR loop...")
+        while True:
+            if stop_requested:
+                print("Stop requested by signal. Exiting.")
+                break
+            if cfg.stop_file and os.path.exists(cfg.stop_file):
+                print(f"Stop file detected: {cfg.stop_file}. Exiting.")
                 break
 
-        if cfg.only_on_change:
-            if text and text != last_text:
-                sender.send(format_message(text, cfg.add_timestamp))
-                last_text = text
-        else:
-            if text:
-                sender.send(format_message(text, cfg.add_timestamp))
+            rect = get_window_rect(cfg.window_title)
+            img_full = grab_window_image(rect)
+            img_crop = apply_crop(img_full, cfg.crop_rect)
+            if cfg.preprocess:
+                img_ocr = preprocess_image(img_crop, cfg.threshold)
+            else:
+                img_ocr = img_crop
+            text = ocr_image(img_ocr, cfg.ocr_lang)
+            if cfg.normalize_whitespace:
+                text = normalize_text(text, cfg.keep_newlines)
 
-        time.sleep(cfg.poll_sec)
+            if cfg.save_screenshot or cfg.save_screenshot_once:
+                if not saved_once or cfg.save_screenshot:
+                    save_screenshots(img_full, img_crop, cfg.screenshot_dir)
+                    saved_once = True
+                if cfg.save_screenshot_once:
+                    break
+
+            if cfg.only_on_change:
+                if text and text != last_text:
+                    sender.send(format_message(text, cfg.add_timestamp))
+                    last_text = text
+            else:
+                if text:
+                    sender.send(format_message(text, cfg.add_timestamp))
+
+            now = time.time()
+            if now - last_heartbeat >= cfg.heartbeat_sec:
+                write_status(cfg.status_file, "running")
+                last_heartbeat = now
+
+            time.sleep(cfg.poll_sec)
+    finally:
+        try:
+            if cfg.status_file:
+                write_status(cfg.status_file, "stopped")
+        except Exception:
+            pass
+        try:
+            if cfg.pid_file and os.path.exists(cfg.pid_file):
+                os.remove(cfg.pid_file)
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":
