@@ -10,3 +10,8 @@ screenshots/
 ocr.pid
 ocr.status
 STOP
+ocr.latest.txt
+ocr.recent.txt
+ocr.webhook.txt
+line_full_*.png
+line_crop_*.png
