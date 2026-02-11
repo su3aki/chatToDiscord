@@ -14,6 +14,7 @@ except Exception:
 
 
 def load_env_file(path: str) -> None:
+    # .env を常に上書き反映（GUIで変更した値を即座に使う）
     if not os.path.exists(path):
         return
     with open(path, "r", encoding="utf-8") as f:
@@ -30,6 +31,7 @@ def load_env_file(path: str) -> None:
 
 
 def read_env_map(path: str) -> dict:
+    # 子プロセス起動時に渡すため、最新の .env を辞書化する
     data = {}
     if not os.path.exists(path):
         return data
@@ -130,7 +132,7 @@ def _find_best_window(title: str) -> int:
         hwnd = win32gui.FindWindow(None, title)
         return hwnd if hwnd else 0
 
-    # choose the largest visible window to avoid tiny/child matches
+    # 最も大きいウィンドウを選択（小さい子ウィンドウ誤検出を防ぐ）
     best_hwnd = 0
     best_area = -1
     for h in results:
@@ -264,6 +266,7 @@ class ControllerApp:
         self.root.after(500, self.refresh_status)
 
     def start(self) -> None:
+        # 最新の .env を子プロセスへ渡す（CROP更新を即反映）
         if self.is_running():
             self.log_var.set("Already running.")
             return
@@ -289,7 +292,7 @@ class ControllerApp:
             self.log_var.set("Stop requested.")
 
     def measure(self) -> None:
-        # DPI awareness already set at startup
+        # 画面座標ベースのフレーム指定（LINEに依存しない）
         if win32gui is None:
             self.log_var.set("pywin32 is required for measure.")
             return
@@ -297,6 +300,7 @@ class ControllerApp:
         self._open_frame_selector()
 
     def _open_frame_selector(self) -> None:
+        # 透明フレームの位置・サイズを画面座標で保存する
         frame_win = tk.Toplevel(self.root)
         frame_win.attributes("-topmost", False)
         frame_win.attributes("-alpha", 0.25)
@@ -367,6 +371,7 @@ class ControllerApp:
                 return
 
             update_env_value(self.env_path, "CROP_RECT", f"{f_left},{f_top},{f_right},{f_bottom}")
+            # 画面絶対座標として扱う
             update_env_value(self.env_path, "CROP_MODE", "screen")
             self.log_var.set("更新されました！")
             status_var.set("更新されました！")

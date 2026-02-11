@@ -119,6 +119,7 @@ class WebhookSender(Sender):
 
 
 def load_env_file(path: str) -> None:
+    # GUIで更新した .env を常に優先して反映する
     if not os.path.exists(path):
         return
     with open(path, "r", encoding="utf-8") as f:
@@ -229,7 +230,7 @@ def enable_dpi_awareness() -> None:
 def grab_window_image(rect: Tuple[int, int, int, int]) -> Image.Image:
     left, top, right, bottom = rect
     with mss.mss() as sct:
-        # Clamp to virtual screen bounds to avoid GDI errors
+        # 仮想スクリーン範囲にクランプしてGDIエラーを回避
         v = sct.monitors[0]
         v_left, v_top = v["left"], v["top"]
         v_right = v_left + v["width"]
@@ -266,6 +267,7 @@ def apply_crop(img: Image.Image, crop_rect: Optional[Tuple[int, int, int, int]])
 def preprocess_image(img: Image.Image, threshold: int, invert: bool) -> Image.Image:
     if img.mode != "RGB":
         img = img.convert("RGB")
+    # 黒背景向けの反転（白背景ならfalse推奨）
     if invert:
         img = ImageOps.invert(img)
     gray = ImageOps.grayscale(img)
@@ -277,6 +279,7 @@ def preprocess_image(img: Image.Image, threshold: int, invert: bool) -> Image.Im
 
 
 def ocr_image(img: Image.Image, lang: str, psm: int) -> str:
+    # PSMは文字配置の仮定（6=ブロック本文）
     config = f"--psm {psm}"
     text = pytesseract.image_to_string(img, lang=lang, config=config)
     return text
@@ -445,6 +448,7 @@ def main() -> None:
                 print(f"Stop file detected: {cfg.stop_file}. Exiting.")
                 break
 
+            # screen: 画面絶対座標 / line: LINEクライアント相対
             if cfg.crop_rect and cfg.crop_mode == "screen":
                 rect = cfg.crop_rect
                 img_full = grab_window_image(rect)
